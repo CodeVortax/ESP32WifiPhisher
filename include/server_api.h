@@ -39,6 +39,7 @@ typedef enum {
     API_START_BLE_SPAM,
     API_STOP_BLE_SPAM,
     API_GET_SCANNED_AP,
+    API_FIND_HIDDEN,
     API_MAX_COMMAND
 } api_command_t;
 

@@ -260,6 +260,7 @@ esp_err_t wifi_connect(const char *ssid, const char *password)
     
     if (password && strlen(password) > 0) {
         strncpy((char *)sta_config.sta.password, password, sizeof(sta_config.sta.password) - 1);
+        sta_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
     } else {
         sta_config.sta.threshold.authmode = WIFI_AUTH_OPEN;
     }

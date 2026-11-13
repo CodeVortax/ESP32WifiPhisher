@@ -14,6 +14,7 @@
 #include "utils.h"
 #include "target.h"
 #include "server_api.h"
+#include "config.h"
 #include "evil_twin.h"
 #include "karma_attack.h"
 #include "deauther.h"
@@ -352,14 +353,15 @@ static void wifi_sniffer_capture_probes(struct libwifi_frame *frame, sniffer_pac
     struct libwifi_sta probe_req_info = {0};
     if (libwifi_parse_probe_req(&probe_req_info, frame) == 0)
     {
-        if(strlen(probe_req_info.ssid) == 0) {
-            goto cleanup;
-        }
-
         if (xSemaphoreTake(probes_semaphore, pdMS_TO_TICKS(10)) == pdTRUE) 
         {
             const uint8_t *dst_mac = (uint8_t *)&frame->header.data.addr1;
             const uint8_t *src_mac = (uint8_t *)frame->header.mgmt_ordered.addr2;
+
+            /* Skip if destination is broadcast/multicast — no associated AP */
+            if (dst_mac && (dst_mac[0] & 0x01) == 1) {
+                goto skip_client;
+            }
             /* Check if this is a new probe request */
             for (int i = 0; i < captured_probes.num_probes; i++) {
                 if (memcmp(captured_probes.probes[i].mac, src_mac, 6) == 0 && strcmp(captured_probes.probes[i].ssid, probe_req_info.ssid) == 0) {
@@ -380,6 +382,7 @@ static void wifi_sniffer_capture_probes(struct libwifi_frame *frame, sniffer_pac
                 ESP_LOGI(TAG, "New Probe Req: %s from "MACSTR, probe_req_info.ssid, MAC2STR(src_mac));
             }
             add_client_to_list(src_mac, dst_mac, sniffer_pkt->length, true, sniffer_pkt->rssi, sniffer_pkt->channel);
+        skip_client:
             xSemaphoreGive(probes_semaphore);
         }
     cleanup:
@@ -420,6 +423,8 @@ static void wifi_sniffer_capture_assoc_req(struct libwifi_frame *frame, sniffer_
                         memcpy(detected_aps.ap[i].ssid, sta_info.ssid, 33);
                         ESP_LOGI(TAG, "Found hidden SSID for AP "MACSTR ": %s", MAC2STR(bssid_mac), sta_info.ssid);
                         ws_log(TAG, "Found hidden SSID for AP "MACSTR ": %s", MAC2STR(bssid_mac), sta_info.ssid);
+                        /* Persist to NVS so it appears on future scans */
+                        save_hidden_ssid_mapping(bssid_mac, sta_info.ssid);
                     }
                     break;
                 }
@@ -541,6 +546,13 @@ static void wifi_sniffer_capture_aps(struct libwifi_frame *frame, sniffer_packet
                 }
                 else {
                     strncpy(tmp, "[Hidden SSID]", 32);
+                    /* Try to load previously resolved SSID from NVS */
+                    char saved_ssid[33] = {0};
+                    if (load_hidden_ssid_mapping(bssid_mac, saved_ssid) == ESP_OK) {
+                        strncpy(tmp, saved_ssid, 32);
+                        strncpy((char *)new_ap->ssid, saved_ssid, 32);
+                        ESP_LOGI(TAG, "Loaded saved SSID for hidden AP "MACSTR ": %s", MAC2STR(bssid_mac), saved_ssid);
+                    }
                 }
 
                 new_ap->rssi = rssi;
@@ -1600,6 +1612,22 @@ esp_err_t wifi_sniffer_scan_fill_aps(void)
         }
     }
     esp_wifi_clear_ap_list();
+
+    /* Load any saved hidden SSID mappings for APs still with empty names */
+    if (xSemaphoreTake(aps_semaphore, pdMS_TO_TICKS(100)) == pdTRUE) {
+        for (int i = 0; i < detected_aps.count; i++) {
+            if (detected_aps.ap[i].ssid[0] == '\0') {
+                char saved_ssid[33] = {0};
+                if (load_hidden_ssid_mapping(detected_aps.ap[i].bssid, saved_ssid) == ESP_OK) {
+                    memcpy(detected_aps.ap[i].ssid, saved_ssid, 33);
+                    ESP_LOGI(TAG, "Loaded saved SSID for hidden AP "MACSTR ": %s",
+                             MAC2STR(detected_aps.ap[i].bssid), saved_ssid);
+                }
+            }
+        }
+        xSemaphoreGive(aps_semaphore);
+    }
+
     return ESP_OK;
 }
 

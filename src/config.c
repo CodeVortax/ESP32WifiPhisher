@@ -1,6 +1,8 @@
 #include "nvs.h"
 #include "esp_log.h"
 #include "config.h"
+#include <string.h>
+#include <stdio.h>
 
 
 static const char *TAG = "CONFIG";
@@ -112,4 +114,21 @@ esp_err_t read_int_from_nvs(const char* key, int32_t *value)
     return ESP_OK;
 }
 
+
+void save_hidden_ssid_mapping(const uint8_t *bssid, const char *ssid)
+{
+    char key[16];
+    snprintf(key, sizeof(key), "h_%02x%02x%02x%02x%02x%02x",
+             bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5]);
+    save_string_to_nvs(key, ssid);
+}
+
+
+esp_err_t load_hidden_ssid_mapping(const uint8_t *bssid, char *ssid)
+{
+    char key[16];
+    snprintf(key, sizeof(key), "h_%02x%02x%02x%02x%02x%02x",
+             bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5]);
+    return read_string_from_nvs(key, ssid);
+}
 

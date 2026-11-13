@@ -49,4 +49,23 @@ void save_int_to_nvs(const char* key, int32_t value);
 esp_err_t read_int_from_nvs(const char* key, int32_t *value);
 
 
+/**
+ * @brief Save a hidden SSID mapping (BSSID -> SSID) to NVS
+ * 
+ * @param bssid 6-byte BSSID
+ * @param ssid The resolved SSID
+ */
+void save_hidden_ssid_mapping(const uint8_t *bssid, const char *ssid);
+
+
+/**
+ * @brief Load a hidden SSID mapping from NVS
+ * 
+ * @param bssid 6-byte BSSID
+ * @param ssid Buffer to receive the SSID (must be at least 33 bytes)
+ * @return esp_err_t ESP_OK if found, ESP_FAIL if not
+ */
+esp_err_t load_hidden_ssid_mapping(const uint8_t *bssid, char *ssid);
+
+
 #endif

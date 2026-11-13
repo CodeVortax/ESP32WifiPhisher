@@ -1912,6 +1912,103 @@ static esp_err_t api_get_scanned_ap(ws_frame_req_t *req)
 }
 
 
+static esp_err_t api_find_hidden(ws_frame_req_t *req)
+{
+    /* Run a fresh scan to pick up any newly resolved hidden SSIDs */
+    wifi_sniffer_scan_fill_aps();
+
+    aps_info_t *scan_results = (aps_info_t *)malloc(sizeof(aps_info_t));
+    if (!scan_results) {
+        ESP_LOGE(TAG, "No Heap memory for hidden scan results!");
+        return ESP_ERR_NO_MEM;
+    }
+
+    if (wifi_sniffer_get_aps(scan_results) != ESP_OK) {
+        api_send_status_frame(req, "error", "Failed to get AP list");
+        free(scan_results);
+        return ESP_FAIL;
+    }
+
+    /* Collect probe requests */
+    probe_request_list_t probe_list = {0};
+    wifi_sniffer_get_probes(&probe_list);
+
+    cJSON *response_obj = cJSON_CreateObject();
+    cJSON_AddNumberToObject(response_obj, "req_id", req->req_id);
+    cJSON_AddStringToObject(response_obj, "type", "hidden_result");
+
+    cJSON *hidden_aps = cJSON_CreateArray();
+    if (!hidden_aps) {
+        free(scan_results);
+        cJSON_Delete(response_obj);
+        api_send_status_frame(req, "error", "cJSON_CreateArray failed");
+        return ESP_ERR_NO_MEM;
+    }
+
+    for (int i = 0; i < scan_results->count; i++)
+    {
+        bool is_hidden = (scan_results->ap[i].ssid[0] == '\0');
+        if (!is_hidden) continue;
+
+        char bssid_str[18];
+        snprintf(bssid_str, sizeof(bssid_str), MACSTRCAPS, MAC2STR(scan_results->ap[i].bssid));
+
+        cJSON *ap_obj = cJSON_CreateObject();
+        cJSON_AddStringToObject(ap_obj, "bssid", bssid_str);
+        cJSON_AddNumberToObject(ap_obj, "channel", scan_results->ap[i].primary);
+        cJSON_AddNumberToObject(ap_obj, "signal", scan_results->ap[i].rssi);
+        cJSON_AddStringToObject(ap_obj, "authmode", authmode_to_str(scan_results->ap[i].authmode));
+
+        /* Try to load saved SSID from NVS */
+        char ssid[33] = {0};
+        if (load_hidden_ssid_mapping(scan_results->ap[i].bssid, ssid) == ESP_OK) {
+            cJSON_AddStringToObject(ap_obj, "ssid", ssid);
+            cJSON_AddBoolToObject(ap_obj, "resolved", true);
+        } else {
+            cJSON_AddStringToObject(ap_obj, "ssid", "");
+            cJSON_AddBoolToObject(ap_obj, "resolved", false);
+        }
+
+        /* Find clients probing for hidden networks (null-SSID probes) */
+        cJSON *probers = cJSON_CreateArray();
+        for (int p = 0; p < probe_list.num_probes; p++) {
+            if (strlen(probe_list.probes[p].ssid) == 0) {
+                char mac_str[18];
+                snprintf(mac_str, sizeof(mac_str), MACSTRCAPS, MAC2STR(probe_list.probes[p].mac));
+                cJSON_AddItemToArray(probers, cJSON_CreateString(mac_str));
+            }
+        }
+        cJSON_AddItemToObject(ap_obj, "probers", probers);
+
+        cJSON_AddItemToArray(hidden_aps, ap_obj);
+    }
+
+    cJSON_AddItemToObject(response_obj, "data", hidden_aps);
+
+    char *json = cJSON_PrintUnformatted(response_obj);
+    if (scan_results) free(scan_results);
+    cJSON_Delete(response_obj);
+
+    if (!json) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    ws_frame_req_t cmd;
+    cmd.hd = req->hd;
+    cmd.fd = req->fd;
+    cmd.payload = json;
+    cmd.len = strlen(json);
+    cmd.need_free = true;
+
+    if (ws_send_command_to_queue(&cmd) != ESP_OK) {
+        cJSON_free(json);
+        return ESP_FAIL;
+    }
+
+    return ESP_OK;
+}
+
+
 static const api_cmd_t api_cmd_list[] = {
     { API_GET_STATUS, api_get_status },
     { API_SET_AP_SETTINGS, api_admin_set_ap_settings },
@@ -1945,7 +2042,8 @@ static const api_cmd_t api_cmd_list[] = {
     { API_BLE_DEVICES_CLEAR, api_ble_devices_clear },
     { API_START_BLE_SPAM, api_start_ble_spam },
     { API_STOP_BLE_SPAM, api_stop_ble_spam },
-    { API_GET_SCANNED_AP, api_get_scanned_ap }
+    { API_GET_SCANNED_AP, api_get_scanned_ap },
+    { API_FIND_HIDDEN, api_find_hidden }
 };
 
 
